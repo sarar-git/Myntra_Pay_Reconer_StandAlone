@@ -134,56 +134,43 @@ class PaymentProcessor:
 
     def create_payment_register(self):
 
-        print("Step D - Creating Payment Register")
-
+        logger.info("CPR-1")
         self.load_excel()
 
+        logger.info("CPR-2")
         postpaid = self.extract_postpaid()
 
+        logger.info("CPR-3")
         prepaid = self.extract_prepaid()
 
-        print("Step E - Concatenating")
-
+        logger.info("CPR-4")
         payment_df = pd.concat(
             [postpaid, prepaid],
             ignore_index=True
         ).copy()
 
-        print("Step F - Converting Amount")
-
-        payment_df.loc[:, "Payment Amount"] = pd.to_numeric(
+        logger.info("CPR-5")
+        payment_df["Payment Amount"] = pd.to_numeric(
             payment_df["Payment Amount"],
             errors="coerce"
         ).fillna(0)
 
-        print("Step G - Converting Date")
-
-        payment_df.loc[:, "Settlement Date"] = pd.to_datetime(
+        logger.info("CPR-6")
+        payment_df["Settlement Date"] = pd.to_datetime(
             payment_df["Settlement Date"],
             errors="coerce"
         )
 
-        print("Step H - Grouping")
-
+        logger.info("CPR-7")
         payment_register = (
-            payment_df
-            .groupby(
-                [
-                    "Settlement Date",
-                    "UTR Number"
-                ],
+            payment_df.groupby(
+                ["Settlement Date", "UTR Number"],
                 as_index=False
             )["Payment Amount"]
             .sum()
-            .sort_values(
-                [
-                    "Settlement Date",
-                    "UTR Number"
-                ]
-            )
         )
 
-        print(f"Payment Register Rows : {len(payment_register)}")
+        logger.info("CPR-8")
 
         return payment_register
 
