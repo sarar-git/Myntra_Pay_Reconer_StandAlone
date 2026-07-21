@@ -192,14 +192,18 @@ class PaymentProcessor:
 
     def save_excel(self, output_file):
 
-        print("Step I - Saving Excel")
+        logger.info("STEP I")
 
         register = self.create_payment_register()
+
+        logger.info("STEP I.1 - Register created")
 
         with pd.ExcelWriter(
             output_file,
             engine="openpyxl"
         ) as writer:
+
+            logger.info("STEP I.2 - ExcelWriter opened")
 
             register.to_excel(
                 writer,
@@ -207,26 +211,31 @@ class PaymentProcessor:
                 index=False
             )
 
-        print("Step J - Loading Workbook")
+            logger.info("STEP I.3 - DataFrame written")
+
+        logger.info("STEP J - Workbook written to disk")
 
         wb = load_workbook(output_file)
 
+        logger.info("STEP K - Workbook loaded")
+
         ws = wb["Payment Register"]
 
-        print("Step K - Formatting Workbook")
+        logger.info("STEP L - Formatting")
 
         format_payment_register(ws)
 
-        print("Step L - Saving Workbook")
+        logger.info("STEP M - Saving workbook")
 
         wb.save(output_file)
 
+        logger.info("STEP N - Closing workbook")
+
         wb.close()
 
-        print("Step M - Completed Successfully")
+        logger.info("STEP O - Completed")
 
         return output_file
-
 
 # ---------------------------------------------------------
 # Local Testing
