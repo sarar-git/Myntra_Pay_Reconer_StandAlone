@@ -150,28 +150,28 @@ class PaymentProcessor:
 
     def save_excel(self, output_file):
 
-    register = self.create_payment_register()
-
-    with pd.ExcelWriter(
-        output_file,
-        engine="openpyxl"
-    ) as writer:
-
-        register.to_excel(
-            writer,
-            sheet_name="Payment Register",
-            index=False
-        )
-
-    wb = load_workbook(output_file)
-
-    ws = wb["Payment Register"]
-
-    format_payment_register(ws)
-
-    wb.save(output_file)
-
-    return output_file
+        register = self.create_payment_register()
+    
+        with pd.ExcelWriter(
+            output_file,
+            engine="openpyxl"
+        ) as writer:
+    
+            register.to_excel(
+                writer,
+                sheet_name="Payment Register",
+                index=False
+            )
+    
+        wb = load_workbook(output_file)
+    
+        ws = wb["Payment Register"]
+    
+        format_payment_register(ws)
+    
+        wb.save(output_file)
+    
+        return output_file
 
 
 # ---------------------------------------------------------
