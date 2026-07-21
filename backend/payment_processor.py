@@ -149,17 +149,42 @@ class PaymentProcessor:
             ignore_index=True
         ).copy()
 
+        # -----------------------------------------------------
+        # Coerce Payment Amount — log how many rows are affected
+        # instead of silently zeroing bad values
+        # -----------------------------------------------------
         logger.info("CPR-5")
         payment_df["Payment Amount"] = pd.to_numeric(
             payment_df["Payment Amount"],
             errors="coerce"
-        ).fillna(0)
+        )
 
+        bad_amounts = int(payment_df["Payment Amount"].isna().sum())
+        if bad_amounts:
+            logger.warning(
+                f"{bad_amounts} row(s) had a non-numeric Payment Amount "
+                f"and were coerced to 0 — check source file for bad values."
+            )
+
+        payment_df["Payment Amount"] = payment_df["Payment Amount"].fillna(0)
+
+        # -----------------------------------------------------
+        # Coerce Settlement Date — normalize to strip time-of-day
+        # so same-day settlements always group together, and log
+        # any rows that fail to parse instead of silently NaT-ing
+        # -----------------------------------------------------
         logger.info("CPR-6")
         payment_df["Settlement Date"] = pd.to_datetime(
             payment_df["Settlement Date"],
             errors="coerce"
-        )
+        ).dt.normalize()
+
+        bad_dates = int(payment_df["Settlement Date"].isna().sum())
+        if bad_dates:
+            logger.warning(
+                f"{bad_dates} row(s) had an unparseable Settlement Date "
+                f"and were set to NaT — check source file for bad values."
+            )
 
         logger.info("CPR-7")
         payment_register = (

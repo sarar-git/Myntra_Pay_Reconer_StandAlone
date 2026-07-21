@@ -68,6 +68,17 @@ def format_payment_register(ws):
         row[2].number_format = '#,##0.00'
 
     # -------------------------
+    # Capture the data range BEFORE adding the Grand Total row,
+    # so the auto-filter never includes the total as if it were
+    # a data row (previously ws.dimensions was read after the
+    # total row was appended).
+    # -------------------------
+
+    last_data_row = ws.max_row
+    last_col_letter = get_column_letter(ws.max_column)
+    data_ref = f"A1:{last_col_letter}{last_data_row}"
+
+    # -------------------------
     # Grand Total
     # -------------------------
 
@@ -95,10 +106,10 @@ def format_payment_register(ws):
     ws.freeze_panes = "A2"
 
     # -------------------------
-    # Filter
+    # Filter — use the data-only range captured above
     # -------------------------
 
-    ws.auto_filter.ref = ws.dimensions
+    ws.auto_filter.ref = data_ref
 
     # -------------------------
     # Auto Width
