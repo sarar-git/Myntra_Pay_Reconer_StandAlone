@@ -24,13 +24,20 @@ button.addEventListener("click", async () => {
 
         if (!response.ok) {
 
-            const error = await response.text();
+            let message = "Unknown server error";
 
-            console.log(error);
-            
-            alert(error.detail);;
+            try {
+                const error = await response.json();
+                message = error.detail || JSON.stringify(error);
+            } catch {
+                message = await response.text();
+            }
 
-            status.innerHTML = error.detail;
+            console.error("Server Error:", message);
+
+            alert(message);
+
+            status.innerHTML = "❌ " + message;
 
             return;
         }
@@ -54,15 +61,13 @@ button.addEventListener("click", async () => {
 
         status.innerHTML = "✅ Payment Register generated successfully.";
 
-    }
-    catch (err) {
+    } catch (err) {
 
         console.error(err);
 
         status.innerHTML = "❌ Unable to connect to the server.";
 
-    }
-    finally {
+    } finally {
 
         button.disabled = false;
 
