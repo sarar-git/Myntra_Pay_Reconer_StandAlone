@@ -16,6 +16,10 @@ header row sitting on the 3rd row (index 2) — the two rows above it
 are merged section labels (e.g. "Payment Details", "Postpaid"/"Prepaid")
 and are not real column names.
 
+Myntra also uses a literal two-character placeholder string of two
+double-quotes for "not yet settled" cells (UTR/date columns), not a
+truly blank cell — this is filtered out explicitly below.
+
 Output Columns
 --------------
 Settlement Date
@@ -35,6 +39,10 @@ HEADER_ROW = 2  # 0-indexed — real column names sit on the 3rd row
 
 
 class PaymentProcessor:
+
+    # Myntra's "not yet settled" placeholder — a literal string of
+    # two double-quotes, not an actually-empty cell.
+    PLACEHOLDER_VALUES = {"", '""'}
 
     def __init__(self, excel_file):
         self.excel_file = excel_file
@@ -89,6 +97,14 @@ class PaymentProcessor:
             )
 
     # -----------------------------------------------------
+    # Placeholder-aware UTR filter
+    # -----------------------------------------------------
+
+    def _is_real_utr(self, series):
+        cleaned = series.astype(str).str.strip()
+        return series.notna() & (~cleaned.isin(self.PLACEHOLDER_VALUES))
+
+    # -----------------------------------------------------
     # Extract Postpaid
     # -----------------------------------------------------
 
@@ -106,8 +122,7 @@ class PaymentProcessor:
 
         df = self.df.copy()
 
-        df = df[df["UTR_Number_Postpaid"].notna()]
-        df = df[df["UTR_Number_Postpaid"].astype(str).str.strip() != ""]
+        df = df[self._is_real_utr(df["UTR_Number_Postpaid"])]
 
         df = df[required].copy()
 
@@ -139,8 +154,7 @@ class PaymentProcessor:
 
         df = self.df.copy()
 
-        df = df[df["UTR_Number_Prepaid"].notna()]
-        df = df[df["UTR_Number_Prepaid"].astype(str).str.strip() != ""]
+        df = df[self._is_real_utr(df["UTR_Number_Prepaid"])]
 
         df = df[required].copy()
 
@@ -176,40 +190,64 @@ class PaymentProcessor:
         ).copy()
 
         # -----------------------------------------------------
-        # Coerce Payment Amount — .loc assignment avoids the pandas
-        # Copy-on-Write chained-assignment warning; log row counts
-        # instead of silently zeroing bad values
+        # Coerce Payment Amount — rebuild via .assign() rather than
+        # in-place .loc mutation, which raises a dtype error when the
+        # source column infers as pandas' newer "str" dtype. Log row
+        # counts instead of silently zeroing bad values.
         # -----------------------------------------------------
         logger.info("CPR-5")
-        payment_df.loc[:, "Payment Amount"] = pd.to_numeric(
-            payment_df["Payment Amount"],
-            errors="coerce"
+        numeric_amount = pd.to_numeric(
+            payment_df["Payment Amount"], errors="coerce"
         )
 
-        bad_amounts = int(payment_df["Payment Amount"].isna().sum())
+        bad_amounts = int(numeric_amount.isna().sum())
         if bad_amounts:
             logger.warning(
                 f"{bad_amounts} row(s) had a non-numeric Payment Amount "
                 f"and were coerced to 0 — check source file for bad values."
             )
 
-        payment_df.loc[:, "Payment Amount"] = payment_df["Payment Amount"].fillna(0)
+        payment_df = payment_df.assign(
+            **{"Payment Amount": numeric_amount.fillna(0)}
+        )
 
         # -----------------------------------------------------
-        # Coerce Settlement Date — .loc assignment + normalize to
-        # strip time-of-day so same-day settlements group together
+        # Coerce Settlement Date — same .assign() approach, plus
+        # normalize to strip time-of-day so same-day settlements
+        # always group together.
         # -----------------------------------------------------
         logger.info("CPR-6")
-        payment_df.loc[:, "Settlement Date"] = pd.to_datetime(
-            payment_df["Settlement Date"],
-            errors="coerce"
+        parsed_date = pd.to_datetime(
+            payment_df["Settlement Date"], errors="coerce"
         ).dt.normalize()
 
-        bad_dates = int(payment_df["Settlement Date"].isna().sum())
+        bad_dates = int(parsed_date.isna().sum())
         if bad_dates:
             logger.warning(
                 f"{bad_dates} row(s) had an unparseable Settlement Date "
                 f"and were set to NaT — check source file for bad values."
+            )
+
+        payment_df = payment_df.assign(
+            **{"Settlement Date": parsed_date}
+        )
+
+        # -----------------------------------------------------
+        # groupby() silently drops rows whose group key is NaT
+        # (pandas default dropna=True). Fine for genuine placeholder
+        # rows (amount 0), but a nonzero amount with no valid date
+        # would otherwise vanish from the Grand Total with zero trace.
+        # -----------------------------------------------------
+        orphaned = payment_df[
+            payment_df["Settlement Date"].isna()
+            & (payment_df["Payment Amount"] != 0)
+        ]
+        if len(orphaned):
+            logger.warning(
+                f"{len(orphaned)} row(s) have a nonzero Payment Amount but "
+                f"no valid Settlement Date — these would be SILENTLY "
+                f"DROPPED from the register. Amount at risk: "
+                f"{orphaned['Payment Amount'].sum()}"
             )
 
         logger.info("CPR-7")
