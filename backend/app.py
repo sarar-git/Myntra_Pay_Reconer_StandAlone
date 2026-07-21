@@ -94,10 +94,13 @@ async def health():
 # ==========================================================
 
 @app.post("/upload")
-async def upload_excel(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...)
-):
+#async def upload_excel(
+    #background_tasks: BackgroundTasks,
+    #file: UploadFile = File(...)
+#):
+async def upload_excel(file: UploadFile = File(...)):
+
+    print("Upload route reached")
 
     if not file.filename:
         raise HTTPException(
@@ -122,6 +125,7 @@ async def upload_excel(
         print("Step 1: File received")
         with uploaded_file.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+        file.file.close()
 
         print("Step 2: File saved")
 
@@ -135,11 +139,18 @@ async def upload_excel(
 
         if not output_file.exists():
             raise Exception("Output file not found")
+        
+        if output_file.stat().st_size == 0:
+            raise Exception("Generated Excel file is empty.")
 
         print("Step 5: Returning file")
 
         background_tasks.add_task(delete_file, uploaded_file)
         background_tasks.add_task(delete_file, output_file)
+
+        print("Output File :", output_file)
+        print("Exists      :", output_file.exists())
+        print("Size (KB)   :", round(output_file.stat().st_size / 1024, 2))
 
         return FileResponse(
             path=output_file,
@@ -152,7 +163,8 @@ async def upload_excel(
 
         print("\n" + "=" * 80)
         print("UPLOAD ERROR")
-        print(f"Exception: {e}")
+        print("Exception Type :", type(e).__name__)
+        print("Exception      :", str(e))
         traceback.print_exc()
         print("=" * 80 + "\n")
         delete_file(uploaded_file)
