@@ -5,6 +5,17 @@ Purpose
 -------
 Reads the Myntra Revamped Payment Report and generates a Payment Register.
 
+The real report ships as a workbook with three sheets:
+    - Glossary          (column definitions only, not data)
+    - forward_settled   (order settlements)
+    - reverse_settled   (return/refund settlements, same columns,
+                          typically negative amounts)
+
+Both settlement sheets share the same column layout, with the real
+header row sitting on the 3rd row (index 2) — the two rows above it
+are merged section labels (e.g. "Payment Details", "Postpaid"/"Prepaid")
+and are not real column names.
+
 Output Columns
 --------------
 Settlement Date
@@ -18,6 +29,10 @@ from utils import format_payment_register
 import pandas as pd
 import logging
 logger = logging.getLogger(__name__)
+
+REQUIRED_SHEETS = ["forward_settled", "reverse_settled"]
+HEADER_ROW = 2  # 0-indexed — real column names sit on the 3rd row
+
 
 class PaymentProcessor:
 
@@ -33,19 +48,30 @@ class PaymentProcessor:
 
         print("Step A - Loading Excel")
 
-        self.df = pd.read_excel(
-            self.excel_file,
-            engine="openpyxl"
-        )
+        xl = pd.ExcelFile(self.excel_file, engine="openpyxl")
 
-        self.df.columns = (
-            self.df.columns.astype(str)
-            .str.strip()
-            .str.replace("\n", "", regex=False)
-            .str.replace("\r", "", regex=False)
-        )
+        missing_sheets = [s for s in REQUIRED_SHEETS if s not in xl.sheet_names]
+        if missing_sheets:
+            raise Exception(
+                f"Missing required sheet(s): {', '.join(missing_sheets)}. "
+                f"Sheets found in file: {', '.join(xl.sheet_names)}"
+            )
 
-        print(f"Loaded {len(self.df)} rows")
+        sheet_frames = []
+        for sheet_name in REQUIRED_SHEETS:
+            sheet_df = xl.parse(sheet_name, header=HEADER_ROW)
+            sheet_df.columns = (
+                sheet_df.columns.astype(str)
+                .str.strip()
+                .str.replace("\n", "", regex=False)
+                .str.replace("\r", "", regex=False)
+            )
+            print(f"  Loaded '{sheet_name}': {len(sheet_df)} rows")
+            sheet_frames.append(sheet_df)
+
+        self.df = pd.concat(sheet_frames, ignore_index=True)
+
+        print(f"Loaded {len(self.df)} total rows across {REQUIRED_SHEETS}")
         print("Columns Found:")
         print(list(self.df.columns))
 
@@ -150,11 +176,12 @@ class PaymentProcessor:
         ).copy()
 
         # -----------------------------------------------------
-        # Coerce Payment Amount — log how many rows are affected
+        # Coerce Payment Amount — .loc assignment avoids the pandas
+        # Copy-on-Write chained-assignment warning; log row counts
         # instead of silently zeroing bad values
         # -----------------------------------------------------
         logger.info("CPR-5")
-        payment_df["Payment Amount"] = pd.to_numeric(
+        payment_df.loc[:, "Payment Amount"] = pd.to_numeric(
             payment_df["Payment Amount"],
             errors="coerce"
         )
@@ -166,15 +193,14 @@ class PaymentProcessor:
                 f"and were coerced to 0 — check source file for bad values."
             )
 
-        payment_df["Payment Amount"] = payment_df["Payment Amount"].fillna(0)
+        payment_df.loc[:, "Payment Amount"] = payment_df["Payment Amount"].fillna(0)
 
         # -----------------------------------------------------
-        # Coerce Settlement Date — normalize to strip time-of-day
-        # so same-day settlements always group together, and log
-        # any rows that fail to parse instead of silently NaT-ing
+        # Coerce Settlement Date — .loc assignment + normalize to
+        # strip time-of-day so same-day settlements group together
         # -----------------------------------------------------
         logger.info("CPR-6")
-        payment_df["Settlement Date"] = pd.to_datetime(
+        payment_df.loc[:, "Settlement Date"] = pd.to_datetime(
             payment_df["Settlement Date"],
             errors="coerce"
         ).dt.normalize()
