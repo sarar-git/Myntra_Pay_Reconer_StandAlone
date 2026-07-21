@@ -1,62 +1,69 @@
-const button=document.getElementById("uploadBtn");
+const button = document.getElementById("uploadBtn");
+const fileInput = document.getElementById("excelFile");
+const status = document.getElementById("status");
 
-const fileInput=document.getElementById("excelFile");
+button.addEventListener("click", async () => {
 
-const status=document.getElementById("status");
-
-button.addEventListener("click",async()=>{
-
-    if(fileInput.files.length===0){
-
-        alert("Select Excel File");
-
+    if (fileInput.files.length === 0) {
+        alert("Please select an Excel (.xlsx) file.");
         return;
-
     }
 
-    status.innerHTML="Uploading...";
+    button.disabled = true;
+    status.innerHTML = "Uploading and processing...";
 
-    const formData=new FormData();
+    const formData = new FormData();
+    formData.append("file", fileInput.files[0]);
 
-    formData.append(
-        "file",
-        fileInput.files[0]
-    );
+    try {
 
-    const response=await fetch(
+        const response = await fetch("/upload", {
+            method: "POST",
+            body: formData
+        });
 
-        API_URL+"/upload",
+        if (!response.ok) {
 
-        {
+            const error = await response.text();
 
-            method:"POST",
+            status.innerHTML = "Processing failed.";
 
-            body:formData
+            alert(error);
 
+            return;
         }
 
-    );
+        const blob = await response.blob();
 
-    if(!response.ok){
+        const downloadUrl = window.URL.createObjectURL(blob);
 
-        status.innerHTML="Upload Failed";
+        const a = document.createElement("a");
 
-        return;
+        a.href = downloadUrl;
+        a.download = "Payment_Register.xlsx";
+
+        document.body.appendChild(a);
+
+        a.click();
+
+        a.remove();
+
+        window.URL.revokeObjectURL(downloadUrl);
+
+        status.innerHTML = "✅ Payment Register generated successfully.";
 
     }
+    catch (err) {
 
-    const blob=await response.blob();
+        console.error(err);
 
-    const url=window.URL.createObjectURL(blob);
+        status.innerHTML = "❌ Unable to connect to the server.";
 
-    const a=document.createElement("a");
+    }
+    finally {
 
-    a.href=url;
+        button.disabled = false;
 
-    a.download="Payment_Register.xlsx";
-
-    a.click();
-
-    status.innerHTML="Completed Successfully";
+    }
 
 });

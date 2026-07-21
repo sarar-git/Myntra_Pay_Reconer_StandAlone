@@ -10,39 +10,34 @@
 
     <title>Myntra Payment Register</title>
 
-    <link rel="stylesheet"
-          href="style.css">
+    <link rel="stylesheet" href="/static/style.css">
 
 </head>
 
 <body>
 
-<div class="container">
+    <div class="container">
 
-    <h1>Myntra Payment Register</h1>
+        <h1>Myntra Payment Register</h1>
 
-    <p>
-        Upload the Myntra Revamped Payment Report
-    </p>
+        <p>
+            Upload the Myntra Revamped Payment Report
+        </p>
 
-    <input
-        type="file"
-        id="excelFile"
-        accept=".xlsx">
+        <input
+            type="file"
+            id="excelFile"
+            accept=".xlsx">
 
-    <button id="uploadBtn">
+        <button id="uploadBtn">
+            Generate Register
+        </button>
 
-        Generate Register
+        <div id="status"></div>
 
-    </button>
+    </div>
 
-    <div id="status"></div>
-
-</div>
-
-<script src="config.js"></script>
-
-<script src="script.js"></script>
+    <script src="/static/script.js"></script>
 
 </body>
 
