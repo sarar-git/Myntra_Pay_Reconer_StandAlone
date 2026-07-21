@@ -1,1 +1,13 @@
-just a sample
+__pycache__/
+*.pyc
+
+.venv/
+venv/
+
+uploads/
+output/
+
+.env
+
+.DS_Store
+Thumbs.db
