@@ -138,15 +138,15 @@ async def upload_excel(
 
     except Exception as e:
 
-    print("\n" + "=" * 80)
-    print("UPLOAD ERROR")
-    traceback.print_exc()
-    print("=" * 80 + "\n")
+        print("\n" + "=" * 80)
+        print("UPLOAD ERROR")
+        print(f"Exception: {e}")
+        traceback.print_exc()
+        print("=" * 80 + "\n")
+        delete_file(uploaded_file)
+        delete_file(output_file)
 
-    delete_file(uploaded_file)
-    delete_file(output_file)
-
-    raise HTTPException(
-        status_code=500,
-        detail=str(e)
-    )
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
