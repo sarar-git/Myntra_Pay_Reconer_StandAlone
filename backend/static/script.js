@@ -17,7 +17,7 @@ button.addEventListener("click", async () => {
 
     try {
 
-        const response = await fetch("/upload", {
+        const response = await fetch("/uploads", {
             method: "POST",
             body: formData
         });
