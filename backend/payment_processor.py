@@ -16,7 +16,8 @@ from openpyxl import load_workbook
 from utils import format_payment_register
 
 import pandas as pd
-
+import logging
+logger = logging.getLogger(__name__)
 
 class PaymentProcessor:
 
