@@ -1,6 +1,7 @@
 from pathlib import Path
 import shutil
 import uuid
+import traceback
 
 from fastapi import (
     FastAPI,
@@ -137,10 +138,15 @@ async def upload_excel(
 
     except Exception as e:
 
-        delete_file(uploaded_file)
-        delete_file(output_file)
+    print("\n" + "=" * 80)
+    print("UPLOAD ERROR")
+    traceback.print_exc()
+    print("=" * 80 + "\n")
 
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+    delete_file(uploaded_file)
+    delete_file(output_file)
+
+    raise HTTPException(
+        status_code=500,
+        detail=str(e)
+    )

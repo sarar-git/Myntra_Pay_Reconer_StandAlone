@@ -26,9 +26,11 @@ button.addEventListener("click", async () => {
 
             const error = await response.text();
 
-            status.innerHTML = "Processing failed.";
+            console.log(error);
+            
+            alert(error.detail);;
 
-            alert(error);
+            status.innerHTML = error.detail;
 
             return;
         }
