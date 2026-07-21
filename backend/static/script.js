@@ -24,12 +24,14 @@ button.addEventListener("click", async () => {
 
         if (!response.ok) {
 
-            let message = "Unknown server error";
+            let message = `HTTP ${response.status}`;
 
-            try {
+            const contentType = response.headers.get("content-type") || "";
+
+            if (contentType.includes("application/json")) {
                 const error = await response.json();
                 message = error.detail || JSON.stringify(error);
-            } catch {
+            } else {
                 message = await response.text();
             }
 
