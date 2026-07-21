@@ -119,12 +119,24 @@ async def upload_excel(
 
     try:
 
+        print("Step 1: File received")
         with uploaded_file.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
+        print("Step 2: File saved")
+
         processor = PaymentProcessor(uploaded_file)
 
+        print("Step 3: Processor created")
+
         processor.save_excel(output_file)
+
+        print("Step 4: Excel generated")
+
+        if not output_file.exists():
+            raise Exception("Output file not found")
+
+        print("Step 5: Returning file")
 
         background_tasks.add_task(delete_file, uploaded_file)
         background_tasks.add_task(delete_file, output_file)
