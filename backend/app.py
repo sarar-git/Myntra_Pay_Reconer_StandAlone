@@ -225,6 +225,8 @@ async def upload_excel(
 
     except Exception as e:
 
+        logger.error(f"UPLOAD FAILED — {type(e).__name__}: {e}")
+
         logger.exception("UPLOAD FAILED")
 
         delete_file(uploaded_file)

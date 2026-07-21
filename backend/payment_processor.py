@@ -260,6 +260,10 @@ class PaymentProcessor:
         )
 
         logger.info("CPR-8")
+        logger.info(
+            f"REGISTER COMPLETE — {len(payment_register)} row(s), "
+            f"Grand Total = {payment_register['Payment Amount'].sum():.2f}"
+        )
 
         return payment_register
 
