@@ -2,20 +2,31 @@ from pathlib import Path
 import shutil
 import uuid
 import traceback
+import logging
 
 from fastapi import (
     FastAPI,
     UploadFile,
     File,
     HTTPException,
-    BackgroundTasks
+    BackgroundTasks,
 )
 
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from payment_processor import PaymentProcessor
+
+# ==========================================================
+# Logging
+# ==========================================================
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+logger.info("APP.PY VERSION 2026-07-21")
 
 # ==========================================================
 # Paths
@@ -40,14 +51,30 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+class LogMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        logger.info(f"REQUEST START : {request.method} {request.url.path}")
+
+        response = await call_next(request)
+
+        logger.info(
+            f"REQUEST END   : {request.method} {request.url.path} -> {response.status_code}"
+        )
+
+        return response
+
+
+app.add_middleware(LogMiddleware)
+
 # ==========================================================
-# Static Files
+# Static
 # ==========================================================
 
 app.mount(
     "/static",
     StaticFiles(directory=STATIC_FOLDER),
-    name="static"
+    name="static",
 )
 
 # ==========================================================
@@ -63,114 +90,118 @@ app.add_middleware(
 )
 
 # ==========================================================
-# Helper
+# Helpers
 # ==========================================================
+
 
 def delete_file(path: Path):
     try:
         if path.exists():
             path.unlink()
-    except Exception:
-        pass
+            logger.info(f"Deleted : {path}")
+    except Exception as e:
+        logger.error(f"Delete failed : {e}")
+
 
 # ==========================================================
 # Home
 # ==========================================================
 
+
 @app.get("/", include_in_schema=False)
 async def home():
-    return FileResponse(TEMPLATE_FOLDER / "index.html")
+    return FileResponse(str(TEMPLATE_FOLDER / "index.html"))
+
 
 # ==========================================================
 # Health
 # ==========================================================
 
+
 @app.get("/health")
 async def health():
     return {"status": "Healthy"}
+
 
 # ==========================================================
 # Upload
 # ==========================================================
 
-@app.post("/upload")
-#async def upload_excel(
-    #background_tasks: BackgroundTasks,
-    #file: UploadFile = File(...)
-#):
-async def upload_excel(file: UploadFile = File(...)):
 
-    print("Upload route reached")
+@app.post("/upload")
+async def upload_excel(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+):
+
+    logger.info("Upload route reached")
 
     if not file.filename:
         raise HTTPException(
             status_code=400,
-            detail="No file selected."
+            detail="No file selected.",
         )
 
     if not file.filename.lower().endswith(".xlsx"):
         raise HTTPException(
             status_code=400,
-            detail="Only .xlsx files are supported."
+            detail="Only .xlsx files are supported.",
         )
 
     unique_id = str(uuid.uuid4())
 
     uploaded_file = UPLOAD_FOLDER / f"{unique_id}.xlsx"
-
     output_file = OUTPUT_FOLDER / f"Payment_Register_{unique_id}.xlsx"
 
     try:
 
-        print("Step 1: File received")
+        logger.info("STEP 1 - Saving uploaded file")
+
         with uploaded_file.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+
         file.file.close()
 
-        print("Step 2: File saved")
+        logger.info("STEP 2 - File saved")
 
         processor = PaymentProcessor(uploaded_file)
 
-        print("Step 3: Processor created")
+        logger.info("STEP 3 - Processor initialized")
 
         processor.save_excel(output_file)
 
-        print("Step 4: Excel generated")
+        logger.info("STEP 4 - Excel generated")
 
         if not output_file.exists():
-            raise Exception("Output file not found")
-        
-        if output_file.stat().st_size == 0:
-            raise Exception("Generated Excel file is empty.")
+            raise Exception("Output file was not created.")
 
-        print("Step 5: Returning file")
+        if output_file.stat().st_size == 0:
+            raise Exception("Generated file is empty.")
+
+        logger.info(
+            f"Output File : {output_file} ({round(output_file.stat().st_size/1024,2)} KB)"
+        )
 
         background_tasks.add_task(delete_file, uploaded_file)
         background_tasks.add_task(delete_file, output_file)
 
-        print("Output File :", output_file)
-        print("Exists      :", output_file.exists())
-        print("Size (KB)   :", round(output_file.stat().st_size / 1024, 2))
+        logger.info("STEP 5 - Returning FileResponse")
 
         return FileResponse(
-            path=output_file,
+            path=str(output_file),
             filename="Payment_Register.xlsx",
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            background=background_tasks
+            background=background_tasks,
         )
 
     except Exception as e:
 
-        print("\n" + "=" * 80)
-        print("UPLOAD ERROR")
-        print("Exception Type :", type(e).__name__)
-        print("Exception      :", str(e))
-        traceback.print_exc()
-        print("=" * 80 + "\n")
+        logger.exception("UPLOAD FAILED")
+
         delete_file(uploaded_file)
         delete_file(output_file)
 
         raise HTTPException(
             status_code=500,
-            detail=str(e)
+            detail=str(e),
         )
