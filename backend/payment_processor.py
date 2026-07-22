@@ -22,31 +22,25 @@ date, and some fee columns), not a truly blank cell — this is
 filtered/coerced around explicitly below.
 
 Reading uses the "calamine" engine (python-calamine) instead of
-openpyxl — measured 6-31x faster on real reports, since openpyxl's
-pure-Python parser was the dominant cost in the whole pipeline.
-Writing still uses openpyxl (calamine is read-only).
+openpyxl — measured 6-31x faster on real reports. Writing still uses
+openpyxl (calamine is read-only).
 
-Output Columns
+Output sheets
 --------------
-Settlement Date
-UTR Number
-Payment Amount
-
-Additionally, every "<X>_Postpaid" / "<X>_Prepaid" column pair found
-across BOTH forward_settled and reverse_settled (they're concatenated
-before this step runs) is combined into a single suffix-free "<X>"
-column:
-    - Numeric pairs (e.g. Settled_Amount) are summed, treating the
-      '""' placeholder as 0.
-    - Identifier pairs (e.g. UTR_Number) are coalesced: whichever side
-      has a real value is used; if both sides have a real, DIFFERENT
-      value (an order split-settled across postpaid and prepaid), both
-      are kept, joined with "; ", so nothing is silently dropped.
-
-The combined + other non-suffixed columns (raw _Postpaid/_Prepaid
-columns dropped), tagged with which source sheet each row came from,
-are written out as a second "Combined Data" sheet alongside the
-Payment Register.
+- Payment Register: Settlement Date / UTR Number / Payment Amount
+- Combined Data: every row from both source sheets, with every
+  "<X>_Postpaid" / "<X>_Prepaid" column pair combined into a single
+  suffix-free "<X>" column, arranged in a logical reading order
+  (identifiers -> pricing -> settlement -> fees -> tax -> logistics
+  -> lifecycle dates). Numeric pairs are summed (placeholder treated
+  as 0); identifier pairs (UTR_Number) are coalesced without ever
+  silently dropping a value.
+- Summary: Forward vs Reverse breakdown, Fee & Commission breakdown,
+  Tax breakdown, and an Unlinked Settlements flag (real settled money
+  with no UTR on that side — money the Register can't include since
+  it groups by UTR).
+- SKU Summary: order count, total settled amount, and average payout
+  per SKU.
 """
 
 from openpyxl import load_workbook
@@ -58,6 +52,55 @@ logger = logging.getLogger(__name__)
 
 REQUIRED_SHEETS = ["forward_settled", "reverse_settled"]
 HEADER_ROW = 2  # 0-indexed — real column names sit on the 3rd row
+
+# Logical column grouping for the Combined Data sheet. Any column not
+# listed here (e.g. a new field Myntra adds in a future report) is
+# appended at the end automatically, in its original order, rather
+# than silently dropped — see get_combined_data().
+COLUMN_ORDER_GROUPS = [
+    # Identifiers
+    ["Source Sheet", "order_date", "order_release_id", "seller_order_id",
+     "sku_id", "style_id", "hsn_code", "brand", "gender",
+     "article_type", "article_level"],
+    # Order & pricing
+    ["MRP", "Seller_Discount", "Platform_Discount", "Customer_Paid_Amount",
+     "Discount_ID", "Seller_Tier"],
+    # Settlement
+    ["UTR_Number", "settlement_date_postpaid_payment",
+     "settlement_date_prepaid_payment", "Expected_Settled_Amount",
+     "Settled_Amount", "Amount_pending_settlement", "Seller_Product_Amount"],
+    # Fees & commission
+    ["Commission_percent_incl_GST", "Commission_Amount_incl_GST",
+     "Fixed_Fee", "Logistics_Cost_Forward_incl_Tax", "Shipped_Fee",
+     "Pick_and_Pack_Fees", "Tech_Enablement_Charges", "Royalty_percent",
+     "Royalty_charges", "Forward_additional_charges", "SJIT_Incentive",
+     "Commission_Discount", "Logistics_Cost_Reverse_incl_Tax",
+     "Reverse_additional_charges"],
+    # Tax
+    ["product_tax_category", "total_tax_rate", "taxable_amount",
+     "igst_amount", "cgst_amount", "sgst_amount", "tcs_amount",
+     "tds_amount", "seller_GST"],
+    # Logistics & shipment
+    ["Warehouse_ID", "po_type", "invoice_number", "packet_id",
+     "tracking_no_fwd", "tracking_no_rvs", "shipment_zone_classification",
+     "delivery_pin_code", "shipping_city", "shipping_state",
+     "shipping_pin_code"],
+    # Lifecycle dates
+    ["packing_date", "delivery_date", "return_date", "return_type"],
+]
+
+FEE_COLUMNS = [
+    "Commission_Amount_incl_GST", "Fixed_Fee",
+    "Logistics_Cost_Forward_incl_Tax", "Shipped_Fee", "Pick_and_Pack_Fees",
+    "Tech_Enablement_Charges", "Royalty_charges",
+    "Forward_additional_charges", "SJIT_Incentive", "Commission_Discount",
+    "Logistics_Cost_Reverse_incl_Tax", "Reverse_additional_charges",
+]
+
+TAX_COLUMNS = [
+    "tcs_amount", "tds_amount", "taxable_amount",
+    "igst_amount", "cgst_amount", "sgst_amount",
+]
 
 
 class PaymentProcessor:
@@ -192,7 +235,7 @@ class PaymentProcessor:
 
     # -----------------------------------------------------
     # Combined Data sheet (combined columns + non-suffixed columns,
-    # original _Postpaid/_Prepaid columns dropped)
+    # original _Postpaid/_Prepaid columns dropped, logically ordered)
     # -----------------------------------------------------
 
     def get_combined_data(self):
@@ -200,7 +243,88 @@ class PaymentProcessor:
             c for c in self.df.columns
             if c.endswith("_Postpaid") or c.endswith("_Prepaid")
         ]
-        return self.df.drop(columns=drop_cols)
+        df = self.df.drop(columns=drop_cols)
+
+        # Apply the logical column order; anything not in a known
+        # group (e.g. a future new field) is appended at the end in
+        # its original order, so nothing is ever silently dropped.
+        ordered = [c for group in COLUMN_ORDER_GROUPS for c in group if c in df.columns]
+        remaining = [c for c in df.columns if c not in ordered]
+        return df[ordered + remaining]
+
+    # -----------------------------------------------------
+    # Summary sheet data (Forward vs Reverse, Fees, Tax,
+    # and an Unlinked Settlements flag)
+    # -----------------------------------------------------
+
+    def get_summary_data(self):
+
+        sections = {}
+
+        # Forward vs Reverse breakdown
+        fwd_rev = self.df.groupby("Source Sheet").agg(
+            Order_Count=("sku_id", "count"),
+            Total_Settled_Amount=("Settled_Amount", "sum"),
+        ).reset_index()
+        total_row = pd.DataFrame([{
+            "Source Sheet": "TOTAL",
+            "Order_Count": fwd_rev["Order_Count"].sum(),
+            "Total_Settled_Amount": fwd_rev["Total_Settled_Amount"].sum(),
+        }])
+        sections["Forward vs Reverse Breakdown"] = pd.concat(
+            [fwd_rev, total_row], ignore_index=True
+        )
+
+        # Fee / commission breakdown
+        fee_cols_present = [c for c in FEE_COLUMNS if c in self.df.columns]
+        fee_totals = self.df[fee_cols_present].sum().reset_index()
+        fee_totals.columns = ["Fee Type", "Total Amount"]
+        sections["Fee & Commission Breakdown"] = fee_totals
+
+        # Tax breakdown
+        tax_cols_present = [c for c in TAX_COLUMNS if c in self.df.columns]
+        tax_totals = self.df[tax_cols_present].sum().reset_index()
+        tax_totals.columns = ["Tax Type", "Total Amount"]
+        sections["Tax Breakdown"] = tax_totals
+
+        # Unlinked Settlements flag — real settled money with no UTR
+        # to attach it to on that side (Register can't include it
+        # since it groups by UTR). Surfaced here so it's visible
+        # instead of showing up as an unexplained total mismatch.
+        sections["Unlinked Settlements (no UTR on that side)"] = (
+            self._get_unlinked_settlements_summary()
+        )
+
+        return sections
+
+    def _get_unlinked_settlements_summary(self):
+        rows = []
+        for arm in ["Postpaid", "Prepaid"]:
+            utr_col = f"UTR_Number_{arm}"
+            amt_col = f"Settled_Amount_{arm}"
+            if utr_col not in self.df.columns or amt_col not in self.df.columns:
+                continue
+            real_mask = self._is_real_utr(self.df[utr_col])
+            amt = pd.to_numeric(self.df[amt_col], errors="coerce").fillna(0)
+            unlinked_mask = (~real_mask) & (amt != 0)
+            rows.append({
+                "Settlement Type": arm,
+                "Row Count": int(unlinked_mask.sum()),
+                "Total Amount": amt[unlinked_mask].sum(),
+            })
+        return pd.DataFrame(rows)
+
+    # -----------------------------------------------------
+    # SKU-level summary (average payout per SKU)
+    # -----------------------------------------------------
+
+    def get_sku_summary(self):
+        summary = self.df.groupby("sku_id").agg(
+            Order_Count=("sku_id", "count"),
+            Total_Settled_Amount=("Settled_Amount", "sum"),
+            Average_Settled_Amount=("Settled_Amount", "mean"),
+        ).reset_index()
+        return summary.sort_values("sku_id").reset_index(drop=True)
 
     # -----------------------------------------------------
     # Validate Columns
@@ -239,9 +363,6 @@ class PaymentProcessor:
 
         self.validate_columns(required)
 
-        # Filter + select required columns BEFORE copying, instead of
-        # copying the full ~60-column frame first — measured 3.4x
-        # faster at scale (50k rows) with identical output.
         mask = self._is_real_utr(self.df["UTR_Number_Postpaid"])
 
         df = self.df.loc[mask, required].copy()
@@ -400,6 +521,11 @@ class PaymentProcessor:
 
         logger.info(f"STEP I.1b - Combined Data sheet built ({len(combined_data)} rows, {len(combined_data.columns)} cols)")
 
+        summary_sections = self.get_summary_data()
+        sku_summary = self.get_sku_summary()
+
+        logger.info(f"STEP I.1c - Summary ({len(summary_sections)} sections) and SKU Summary ({len(sku_summary)} SKUs) built")
+
         with pd.ExcelWriter(
             output_file,
             engine="openpyxl"
@@ -416,6 +542,29 @@ class PaymentProcessor:
             combined_data.to_excel(
                 writer,
                 sheet_name="Combined Data",
+                index=False
+            )
+
+            # Summary sheet: each section is a small table stacked
+            # vertically, with its title as a row above it and one
+            # blank row of separation.
+            current_row = 0
+            for title, section_df in summary_sections.items():
+                title_df = pd.DataFrame([[title]])
+                title_df.to_excel(
+                    writer, sheet_name="Summary", index=False, header=False,
+                    startrow=current_row
+                )
+                current_row += 1
+                section_df.to_excel(
+                    writer, sheet_name="Summary", index=False,
+                    startrow=current_row
+                )
+                current_row += len(section_df) + 2  # +1 header row, +1 blank row
+
+            sku_summary.to_excel(
+                writer,
+                sheet_name="SKU Summary",
                 index=False
             )
 
