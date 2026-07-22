@@ -35,12 +35,18 @@ Output sheets
   -> lifecycle dates). Numeric pairs are summed (placeholder treated
   as 0); identifier pairs (UTR_Number) are coalesced without ever
   silently dropping a value.
-- Summary: Forward vs Reverse breakdown, Fee & Commission breakdown,
-  Tax breakdown, and an Unlinked Settlements flag (real settled money
-  with no UTR on that side — money the Register can't include since
-  it groups by UTR).
-- SKU Summary: order count, total settled amount, and average payout
-  per SKU.
+- Summary: Forward vs Reverse breakdown (Qty split into Forward_Qty /
+  Reverse_Qty [negated] / net Qty, plus Total_Settled_Amount), Fee &
+  Commission breakdown, Tax breakdown, and an Unlinked Settlements
+  flag (real settled money with no UTR on that side — money the
+  Register can't include since it groups by UTR).
+- SKU Summary: Forward_Qty / Reverse_Qty [negated] / Qty (net),
+  Total_Settled_Amount, and Average_Settled_Amount per SKU.
+
+Note: there is no dedicated quantity/units column in the source
+report, so "Qty" here means count of settlement rows (order line
+items), not units sold. Reverse (return) rows are negated so net Qty
+reflects returns reducing the effective settled quantity.
 """
 
 from openpyxl import load_workbook
@@ -261,14 +267,19 @@ class PaymentProcessor:
 
         sections = {}
 
-        # Forward vs Reverse breakdown
+        # Forward vs Reverse breakdown — Qty is the count of settlement
+        # rows (no dedicated quantity column exists in the source
+        # report). Reverse rows are negated so the TOTAL row shows the
+        # net Qty (forward minus returns), consistent with how negative
+        # amounts already work for reverse_settled.
         fwd_rev = self.df.groupby("Source Sheet").agg(
-            Order_Count=("sku_id", "count"),
+            Qty=("sku_id", "count"),
             Total_Settled_Amount=("Settled_Amount", "sum"),
         ).reset_index()
+        fwd_rev.loc[fwd_rev["Source Sheet"] == "reverse_settled", "Qty"] *= -1
         total_row = pd.DataFrame([{
             "Source Sheet": "TOTAL",
-            "Order_Count": fwd_rev["Order_Count"].sum(),
+            "Qty": fwd_rev["Qty"].sum(),
             "Total_Settled_Amount": fwd_rev["Total_Settled_Amount"].sum(),
         }])
         sections["Forward vs Reverse Breakdown"] = pd.concat(
@@ -319,11 +330,25 @@ class PaymentProcessor:
     # -----------------------------------------------------
 
     def get_sku_summary(self):
-        summary = self.df.groupby("sku_id").agg(
-            Order_Count=("sku_id", "count"),
-            Total_Settled_Amount=("Settled_Amount", "sum"),
-            Average_Settled_Amount=("Settled_Amount", "mean"),
-        ).reset_index()
+        # Qty = count of settlement rows (no dedicated quantity column
+        # exists in the source report). Reverse row counts are negated
+        # so Qty (net) = Forward_Qty + Reverse_Qty reflects returns
+        # reducing the effective settled quantity for that SKU.
+        counts = self.df.groupby(["sku_id", "Source Sheet"]).size().unstack(fill_value=0)
+        forward_qty = counts.get("forward_settled", 0)
+        reverse_qty = -counts.get("reverse_settled", 0)
+
+        amounts = self.df.groupby("sku_id")["Settled_Amount"].agg(["sum", "mean"])
+
+        summary = pd.DataFrame({
+            "sku_id": counts.index,
+            "Forward_Qty": forward_qty.values if hasattr(forward_qty, "values") else forward_qty,
+            "Reverse_Qty": reverse_qty.values if hasattr(reverse_qty, "values") else reverse_qty,
+        })
+        summary["Qty"] = summary["Forward_Qty"] + summary["Reverse_Qty"]
+        summary["Total_Settled_Amount"] = amounts["sum"].values
+        summary["Average_Settled_Amount"] = amounts["mean"].values
+
         return summary.sort_values("sku_id").reset_index(drop=True)
 
     # -----------------------------------------------------
