@@ -17,14 +17,22 @@ are merged section labels (e.g. "Payment Details", "Postpaid"/"Prepaid")
 and are not real column names.
 
 Myntra also uses a literal two-character placeholder string of two
-double-quotes for "not yet settled" cells (UTR/date columns), not a
-truly blank cell — this is filtered out explicitly below.
+double-quotes for "not yet settled" / "not applicable" cells (UTR,
+date, and some fee columns), not a truly blank cell — this is
+filtered/coerced around explicitly below.
 
 Output Columns
 --------------
 Settlement Date
 UTR Number
 Payment Amount
+
+Additionally, every "<X>_Postpaid" / "<X>_Prepaid" column pair in the
+loaded data is combined into a single suffix-free "<X>" column
+(e.g. Settled_Amount_Postpaid + Settled_Amount_Prepaid -> Settled_Amount),
+for every pair that is genuinely numeric. Identifier-style pairs (e.g.
+UTR_Number_Postpaid / UTR_Number_Prepaid) are detected and skipped
+automatically. The original _Postpaid/_Prepaid columns are kept as-is.
 """
 
 from openpyxl import load_workbook
@@ -40,8 +48,8 @@ HEADER_ROW = 2  # 0-indexed — real column names sit on the 3rd row
 
 class PaymentProcessor:
 
-    # Myntra's "not yet settled" placeholder — a literal string of
-    # two double-quotes, not an actually-empty cell.
+    # Myntra's "not yet settled" / "not applicable" placeholder — a
+    # literal string of two double-quotes, not an actually-empty cell.
     PLACEHOLDER_VALUES = {"", '""'}
 
     def __init__(self, excel_file):
@@ -80,8 +88,58 @@ class PaymentProcessor:
         self.df = pd.concat(sheet_frames, ignore_index=True)
 
         print(f"Loaded {len(self.df)} total rows across {REQUIRED_SHEETS}")
+
+        self._combine_prepaid_postpaid()
+
         print("Columns Found:")
         print(list(self.df.columns))
+
+    # -----------------------------------------------------
+    # Combine every <X>_Postpaid / <X>_Prepaid pair into <X>
+    # -----------------------------------------------------
+
+    def _combine_prepaid_postpaid(self):
+
+        print("Step A.1 - Combining Postpaid/Prepaid column pairs")
+
+        postpaid_cols = [c for c in self.df.columns if c.endswith("_Postpaid")]
+
+        combined = []
+        skipped = []
+
+        for pcol in postpaid_cols:
+            base = pcol[:-len("_Postpaid")]
+            prepaid_col = f"{base}_Prepaid"
+
+            if prepaid_col not in self.df.columns:
+                skipped.append(f"{base} (no matching Prepaid column)")
+                continue
+
+            # Coerce first, then judge numeric-ness from the coercion
+            # result — not the raw dtype. A column can be dtype=object
+            # because it mixes real 0s with Myntra's '""' placeholder
+            # string, and still be a genuinely numeric column once the
+            # placeholder is treated as 0.
+            post_numeric = pd.to_numeric(self.df[pcol], errors="coerce")
+            pre_numeric = pd.to_numeric(self.df[prepaid_col], errors="coerce")
+
+            # A true identifier column (e.g. UTR_Number) coerces to ALL
+            # NaN — no row in it was ever a real number. That's the
+            # real skip signal, not the column's raw dtype label.
+            if post_numeric.isna().all() and pre_numeric.isna().all():
+                skipped.append(f"{base} (not numeric — likely an identifier)")
+                continue
+
+            if base in self.df.columns:
+                skipped.append(f"{base} (a column with this exact name already exists)")
+                continue
+
+            self.df[base] = post_numeric.fillna(0) + pre_numeric.fillna(0)
+            combined.append(base)
+
+        print(f"  Combined {len(combined)} column pair(s): {combined}")
+        if skipped:
+            print(f"  Skipped {len(skipped)}: {skipped}")
 
     # -----------------------------------------------------
     # Validate Columns
@@ -259,9 +317,8 @@ class PaymentProcessor:
             .sum()
         )
 
-        logger.info("CPR-8")
         logger.info(
-            f"REGISTER COMPLETE — {len(payment_register)} row(s), "
+            f"CPR-8 - REGISTER COMPLETE - {len(payment_register)} row(s), "
             f"Grand Total = {payment_register['Payment Amount'].sum():.2f}"
         )
 
