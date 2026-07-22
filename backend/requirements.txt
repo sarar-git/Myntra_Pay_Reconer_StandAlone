@@ -3,3 +3,4 @@ uvicorn==0.35.0
 pandas==2.3.1
 openpyxl==3.1.5
 python-multipart==0.0.20
+python-calamine==0.5.3
